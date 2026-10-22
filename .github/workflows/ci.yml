@@ -1,0 +1,23 @@
+name: Test action
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run lint
+      # Test the committed bundle before rebuilding it, using mock API responses only.
+      - run: npm test
+      - run: npm run build
+      - run: git diff --exit-code -- dist
+      - run: npm test
