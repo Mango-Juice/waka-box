@@ -1,19 +1,46 @@
 require("dotenv").config();
-const { WakaTimeClient, RANGE } = require("wakatime-client");
 const { Octokit } = require("@octokit/rest");
+
+class ActionError extends Error {}
 
 const {
   GIST_ID: gistId,
   GH_TOKEN: githubToken,
-  WAKATIME_API_KEY: wakatimeApiKey
+  WAKATIME_API_KEY: wakatimeAccessToken
 } = process.env;
-
-const wakatime = new WakaTimeClient(wakatimeApiKey);
 
 const octokit = new Octokit({ auth: `token ${githubToken}` });
 
 async function main() {
-  const stats = await wakatime.getMyStats({ range: RANGE.LAST_7_DAYS });
+  if (!wakatimeAccessToken || !wakatimeAccessToken.trim()) {
+    throw new ActionError(
+      "WAKATIME_API_KEY must contain a WakaTime OAuth access token."
+    );
+  }
+  let response;
+  try {
+    response = await fetch(
+      "https://wakatime.com/api/v1/users/current/stats/last_7_days",
+      {
+        headers: { Authorization: `Bearer ${wakatimeAccessToken.trim()}` },
+        redirect: "error"
+      }
+    );
+  } catch (error) {
+    throw new ActionError("Unable to request WakaTime stats.");
+  }
+  if (!response.ok) {
+    throw new ActionError(
+      `Unable to get WakaTime stats (HTTP ${response.status}). Check the OAuth token's validity and stats access.`
+    );
+  }
+  let stats;
+  try {
+    stats = await response.json();
+    if (!Array.isArray(stats.data.languages)) throw new ActionError();
+  } catch (error) {
+    throw new ActionError("WakaTime returned invalid stats.");
+  }
   await updateGist(stats);
 }
 
@@ -27,7 +54,7 @@ async function updateGist(stats) {
   try {
     gist = await octokit.gists.get({ gist_id: gistId });
   } catch (error) {
-    console.error(`Unable to get gist\n${error}`);
+    throw new ActionError("Unable to get gist.");
   }
 
   const lines = [];
@@ -60,7 +87,7 @@ async function updateGist(stats) {
       }
     });
   } catch (error) {
-    console.error(`Unable to update gist\n${error}`);
+    throw new ActionError("Unable to update gist.");
   }
 }
 
@@ -79,6 +106,12 @@ function generateBarChart(percent, size) {
     .padEnd(size, syms.substring(0, 1));
 }
 
-(async () => {
-  await main();
-})();
+main().catch(error => {
+  // Request errors can contain authorization headers; only display our own messages.
+  console.error(
+    error instanceof ActionError
+      ? error.message
+      : "Unable to update gist with WakaTime stats."
+  );
+  process.exitCode = 1;
+});
